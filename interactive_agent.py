@@ -100,25 +100,41 @@ async def main():
                 participant=Participant(display_name="Customer"),
             )
             
-            # Poll for NEW agent response (not seen before)
+            # Poll for NEW agent responses (not seen before)
+            # Agent may send multiple messages in one turn
             print("Agent: ", end="", flush=True)
-            response_printed = False
+            last_new_message_time = None
+            total_responses = 0
+            
             for _ in range(60):
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.5)
                 events = client.sessions.list_events(session_id=session.id)
                 
-                # Find ai_agent messages we haven't seen yet
+                # Find NEW ai_agent messages
+                new_messages = []
                 for event in events:
                     if event.source == "ai_agent" and event.kind == "message":
                         if event.id not in seen_message_ids:
                             seen_message_ids.add(event.id)
                             if event.data and "message" in event.data:
-                                print(event.data["message"])
-                                response_printed = True
-                                break
-                if response_printed:
-                    break
-            else:
+                                new_messages.append(event.data["message"])
+                
+                # Print any new messages found
+                for msg in new_messages:
+                    if total_responses > 0:
+                        print()  # newline between multiple responses
+                    print(msg)
+                    total_responses += 1
+                    last_new_message_time = asyncio.get_event_loop().time()
+                
+                # If we got responses, wait a bit more to see if there are more
+                # Exit if no new messages for 3 seconds after getting some
+                if last_new_message_time:
+                    elapsed = asyncio.get_event_loop().time() - last_new_message_time
+                    if elapsed > 3:
+                        break
+            
+            if total_responses == 0:
                 print("[No response received]")
                 
         except Exception as e:
