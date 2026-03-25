@@ -100,39 +100,43 @@ async def main():
                 participant=Participant(display_name="Customer"),
             )
             
-            # Poll for NEW agent responses (not seen before)
-            # Agent may send multiple messages in one turn
+            # Poll for NEW agent responses - exit when status is "ready"
+            # Agent lifecycle: acknowledged -> typing -> processing -> ready
             print("Agent: ", end="", flush=True)
-            last_new_message_time = None
             total_responses = 0
+            last_seen_offset = -1
             
-            for _ in range(60):
+            for _ in range(120):  # Up to 60 seconds total
                 await asyncio.sleep(0.5)
                 events = client.sessions.list_events(session_id=session.id)
                 
-                # Find NEW ai_agent messages
-                new_messages = []
-                for event in events:
-                    if event.source == "ai_agent" and event.kind == "message":
-                        if event.id not in seen_message_ids:
-                            seen_message_ids.add(event.id)
-                            if event.data and "message" in event.data:
-                                new_messages.append(event.data["message"])
+                # Collect new events sorted by offset
+                new_events = sorted(
+                    [e for e in events if e.offset > last_seen_offset],
+                    key=lambda e: e.offset
+                )
                 
-                # Print any new messages found
-                for msg in new_messages:
-                    if total_responses > 0:
-                        print()  # newline between multiple responses
-                    print(msg)
-                    total_responses += 1
-                    last_new_message_time = asyncio.get_event_loop().time()
+                agent_ready = False
+                for event in new_events:
+                    last_seen_offset = max(last_seen_offset, event.offset)
+                    
+                    if event.source == "ai_agent":
+                        if event.kind == "message":
+                            if event.id not in seen_message_ids:
+                                seen_message_ids.add(event.id)
+                                if event.data and "message" in event.data:
+                                    if total_responses > 0:
+                                        print()
+                                    print(event.data["message"])
+                                    total_responses += 1
+                        
+                        elif event.kind == "status":
+                            print(f"\n[DEBUG status] data={event.data}", flush=True)
+                            if event.data and event.data.get("status") == "ready":
+                                agent_ready = True
                 
-                # If we got responses, wait a bit more to see if there are more
-                # Exit if no new messages for 3 seconds after getting some
-                if last_new_message_time:
-                    elapsed = asyncio.get_event_loop().time() - last_new_message_time
-                    if elapsed > 3:
-                        break
+                if agent_ready:
+                    break
             
             if total_responses == 0:
                 print("[No response received]")
